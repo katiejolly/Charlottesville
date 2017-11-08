@@ -1,0 +1,135 @@
+---
+title: "Dissimilarity Indices"
+author: "Solutions"
+date: "November 7, 2017"
+output: html_document
+---
+
+```{r include = FALSE}
+library(leaflet)
+library(ggplot2)
+library(tigris)
+library(readr)
+library(googlesheets)
+library(ggthemes)
+
+options(tigris_use_cache = TRUE)
+```
+
+```{r}
+# registering the spreadsheet
+
+cville_sheets <- gs_url("https://docs.google.com/spreadsheets/d/1ISo4boBzGck4N8Jje_kDKCM8eVP6ftLCbXGbnHCx-f8/edit#gid=0")
+```
+
+
+```{r}
+cville_tracts <- tracts(state = "VA", county = c("Albemarle", "Fluvanna", "Greene", "Nelson", "Charlottesville city"))
+
+cville_race <- cville_sheets %>%
+  gs_read(ws= "geo_race")
+
+cville_race_geo <- geo_join(cville_tracts, cville_race, by_sp = "GEOID", by_df = "Id2", how = "inner")
+```
+
+```{r}
+pal <- colorBin("PuBu", cville_race_geo$P_white, 6)
+
+leaflet(cville_race_geo) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    fillColor = ~pal(P_white),
+    fillOpacity = 0.4,
+    color = "Black",
+    weight = 0.7
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~P_white,
+    labFormat = labelFormat(suffix = "%"),
+    title = "Percent White"
+  ) %>%
+  addMiniMap(
+    tiles = providers$CartoDB.Positron,
+    position="topright",
+    toggleDisplay = TRUE
+  )
+  
+```
+
+```{r}
+make_map <- function(variable_name, race) {
+  pal <- colorBin("PuBu", variable_name, 6)
+
+  m <- leaflet(cville_race_geo) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addPolygons(
+      fillColor = ~pal(variable_name),
+      fillOpacity = 0.4,
+      color = "Black",
+      weight = 0.7
+    ) %>%
+    addLegend(
+      position = "bottomright",
+      pal = pal,
+      values = ~P_white,
+      labFormat = labelFormat(suffix = "%"),
+      title = paste0("Percent ", race)
+    ) %>%
+    addMiniMap(
+      tiles = providers$CartoDB.Positron,
+      position="topright",
+      toggleDisplay = TRUE
+    )
+  return(m)
+}
+```
+
+```{r}
+white <- make_map(variable_name = cville_race_geo$P_white, race = "White")
+
+white
+```
+
+```{r}
+black <- make_map(variable_name = cville_race_geo$P_black, race = "Black")
+
+black
+```
+
+```{r}
+hispanic <- make_map(variable_name = cville_race_geo$P_hispanic, race = "Hispanic")
+
+hispanic
+```
+
+```{r}
+asian <- make_map(variable_name = cville_race_geo$P_asian, race = "Asian")
+
+asian
+```
+
+```{r}
+cville_dissimilarity <- cville_sheets %>%
+  gs_read(ws = 2)
+```
+
+```{r}
+cville_dissimilarity$Race <- factor(cville_dissimilarity$Race, levels = c("White", "Black", "Hispanic", "Asian", "Other", "American Indian/Alaska Native", "Hawaiian/Pacific Islander"))
+
+ggplot(cville_dissimilarity, aes(x = Race, y = Proportion)) +
+  geom_bar(stat = "identity", fill = "#f27059") + theme_hc() +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) + 
+  ggtitle("Racial/Ethnic Representation")
+```
+
+```{r}
+cville_dissimilarity$Race <- factor(cville_dissimilarity$Race, levels = c("Asian", "Other", "Black", "White", "Hawaiian/Pacific Islander", "Hispanic", "American Indian/Alaska Native"))
+
+ggplot(cville_dissimilarity, aes(x = Race, y = Dissimilarity_index)) +
+  geom_bar(stat = "identity", fill = "#f27059") + theme_hc() +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) + 
+  ggtitle("Dissimilarity Indices")
+```
+
