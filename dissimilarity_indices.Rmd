@@ -1,6 +1,6 @@
 ---
 title: "Dissimilarity Indices"
-author: "Solutions"
+author: "Katie Jolly"
 date: "November 7, 2017"
 output: html_document
 ---
