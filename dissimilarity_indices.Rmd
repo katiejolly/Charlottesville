@@ -60,7 +60,7 @@ leaflet(cville_race_geo) %>%
 
 ```{r}
 make_map <- function(variable_name, race) {
-  pal <- colorBin("PuBu", variable_name, 6)
+  pal <- colorBin("PuBu", variable_name, 4)
 
   m <- leaflet(cville_race_geo) %>%
     addProviderTiles(providers$CartoDB.Positron) %>%
@@ -73,7 +73,7 @@ make_map <- function(variable_name, race) {
     addLegend(
       position = "bottomright",
       pal = pal,
-      values = ~P_white,
+      values = ~variable_name,
       labFormat = labelFormat(suffix = "%"),
       title = paste0("Percent ", race)
     ) %>%
@@ -111,6 +111,25 @@ asian
 ```
 
 ```{r}
+pacific_is <- make_map(cville_race_geo$P_hawaiian, "Hawaiian/Pacific Islander")
+
+pacific_is
+```
+
+```{r}
+native <- make_map(cville_race_geo$P_AmIn, "American Indian/Alaska Native")
+
+native
+```
+
+```{r}
+other <- make_map(cville_race_geo$P_other, "Other")
+
+other
+```
+
+
+```{r}
 cville_dissimilarity <- cville_sheets %>%
   gs_read(ws = 2)
 ```
@@ -118,10 +137,18 @@ cville_dissimilarity <- cville_sheets %>%
 ```{r}
 cville_dissimilarity$Race <- factor(cville_dissimilarity$Race, levels = c("White", "Black", "Hispanic", "Asian", "Other", "American Indian/Alaska Native", "Hawaiian/Pacific Islander"))
 
-ggplot(cville_dissimilarity, aes(x = Race, y = Proportion)) +
+repres <- ggplot(cville_dissimilarity, aes(x = Race, y = Proportion)) +
   geom_bar(stat = "identity", fill = "#f27059") + theme_hc() +
   theme(axis.text.x = element_text(angle = 70, hjust = 1)) + 
-  ggtitle("Racial/Ethnic Representation")
+  ggtitle("Racial/Ethnic Representation") + 
+  theme(title = element_text(color = "#6f6f70", size = 15), axis.title = element_text(color = "#6f6f70", size = 12), axis.text = element_text(color = "#6f6f70")) + 
+  xlab(NULL) +
+  geom_text(aes(x = Race, y = Proportion, label= Proportion), vjust=-0.8, color = "#6f6f70") + 
+  ylim(0,1)
+
+repres
+
+ggsave( "representation.png", plot = repres)
 ```
 
 ```{r}
@@ -130,6 +157,55 @@ cville_dissimilarity$Race <- factor(cville_dissimilarity$Race, levels = c("Asian
 ggplot(cville_dissimilarity, aes(x = Race, y = Dissimilarity_index)) +
   geom_bar(stat = "identity", fill = "#f27059") + theme_hc() +
   theme(axis.text.x = element_text(angle = 70, hjust = 1)) + 
-  ggtitle("Dissimilarity Indices")
+  ggtitle("Dissimilarity Indices") + geom_text(aes(label= Dissimilarity_index), vjust=-0.2)
+
+ggplot(cville_dissimilarity) +
+  geom_segment(aes(x=Race, y=Dissimilarity_index, xend=Race, yend=0), size = 1.1, color = "#6f6f70") + 
+  geom_point(aes(x=Race, y=Dissimilarity_index), size = 3.7, color = "#f27059") +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
+  labs(x = NULL, y = "Dissimilarity index value", title = "Dissimilarity indices in Charlottesville, VA") + 
+  theme_hc() +
+  theme(title = element_text(color = "#6f6f70", size = 15), axis.title = element_text(color = "#6f6f70", size = 12), axis.text = element_text(color = "#6f6f70")) + 
+  geom_text(aes(x = Race, y = Dissimilarity_index, label= Dissimilarity_index), vjust=-0.8, color = "#6f6f70") +
+  ylim(0, 60) 
+
+ggsave("lolipop_index.png")
 ```
 
+```{r}
+group_quarters <- read_csv("group_quarters.csv")
+
+colnames(group_quarters) <- group_quarters[1,]
+
+colnames(group_quarters)[4] <- "Total"
+
+group_quarters$Total <- as.numeric(group_quarters$Total)
+
+group_quarters <- group_quarters[-1,]
+
+group_quarters_geo <- geo_join(cville_tracts, group_quarters, by_sp = "GEOID", by_df = "Id2", how = "inner")
+```
+
+```{r}
+pal <- colorBin(palette = "PuBu", domain = group_quarters_geo$Total, 3)
+
+leaflet(group_quarters_geo) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+   addPolygons(
+      fillColor = ~pal(as.numeric(group_quarters_geo$Institutionalized.population..101.106..201.203..301..401.405.....Correctional.facilities.for.adults..101.106..)),
+      fillOpacity = 0.4,
+      color = "Black",
+      weight = 0.7
+  ) %>%
+    addLegend(
+      position = "bottomright",
+      pal = pal,
+      values = ~as.numeric(group_quarters_geo$Institutionalized.population..101.106..201.203..301..401.405.....Correctional.facilities.for.adults..101.106..),
+      title = "Population in Correctional Facility"
+    ) %>%
+    addMiniMap(
+      tiles = providers$CartoDB.Positron,
+      position="topright",
+      toggleDisplay = TRUE
+    )
+```
