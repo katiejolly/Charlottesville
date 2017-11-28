@@ -17,8 +17,8 @@ library(tigris)
 library(tidyverse)
 library(tidycensus)
 library(ggthemes)
-med_hsgvalue_2015 <- read_csv("ACS_15_5YR_B25077_with_ann.csv")
-med_hsgvalue_2010 <- read_csv("ACS_10_5YR_B25077_with_ann.csv")
+med_hsgvalue_2015 <- read_csv("https://raw.githubusercontent.com/katiejolly/Charlottesville/master/ACS_15_5YR_B25077_with_ann.csv")
+med_hsgvalue_2010 <- read_csv("https://raw.githubusercontent.com/katiejolly/Charlottesville/master/ACS_10_5YR_B25077_with_ann.csv")
 ```
 
 # Cleaning data
