@@ -1,0 +1,543 @@
+---
+title: "Housing Markets in Charlottesville, VA"
+author: "Katie Jolly"
+date: "November 21, 2017"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: "cosmo"
+---
+
+# Packages and data
+
+```{r message=FALSE, warning=FALSE}
+library(leaflet)
+library(tigris)
+library(tidyverse)
+library(tidycensus)
+library(ggthemes)
+med_hsgvalue_2015 <- read_csv("ACS_15_5YR_B25077_with_ann.csv")
+med_hsgvalue_2010 <- read_csv("ACS_10_5YR_B25077_with_ann.csv")
+
+options(tigris_use_cache = TRUE) # save census tract files
+```
+
+# Cleaning data
+
+```{r}
+# function to clean the two tables
+
+clean_table <- function(df) {
+  d <- df
+  colnames(d) <- c("Id", "GEOID", "Tract", "Value", "MOE") # make tidy variable names
+  d <- d[-1, ] # delete the descriptive row
+  d$Value <- as.numeric(d$Value)
+  d$MOE <- as.numeric(d$MOE)
+  d <- separate(d, Tract, c("Tract", "County"), ",") # create separate columns for tract number and county
+  d$Tract <- substring(d$Tract, first = 14, last = length(d$Tract)) # take out the "Census tract: " part
+  d <- d %>%
+    mutate(Value = ifelse(MOE > 0.333* Value, NA, Value)) # take out any values that have a high MOE
+  return(d)
+}
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# create clean versions of the data
+
+cpi_10 <- mean(c(187.1, 193.233, 200.388, 202.217, 200.853)) # find the mean from the bls data for urban south region 
+
+cpi_15 <- mean(c(221.495, 206.995, 211.299, 207.254, 203.627)) # find the mean from the bls data for urban south region
+
+cpi_rate <- cpi_15/cpi_10 # calculate the growth
+
+med_value_15_clean <- clean_table(med_hsgvalue_2015) # use my cleaning function to fix these tables. 
+
+
+
+med_value_10_clean <- clean_table(med_hsgvalue_2010) %>%
+  mutate(Value_10_real = cpi_rate * Value)# add the adjusted value variable to the cleaned table
+
+
+```
+
+
+# Calculations
+
+
+```{r}
+msa_med_value_10_real <- median(med_value_10_clean$Value_10_real, na.rm = TRUE)
+
+msa_med_value_15 <- median(med_value_15_clean$Value, na.rm = TRUE)
+
+msa_sd_10_real <- round(sd(med_value_10_clean$Value_10_real, na.rm = TRUE), 3)
+msa_sd_15 <- round(sd(med_value_15_clean$Value, na.rm = TRUE), 3)
+
+med_value_10_clean <- med_value_10_clean %>%
+  mutate(Ratio_10_real = round(Value_10_real/msa_med_value_10_real, 2))
+
+med_value_15_clean <- med_value_15_clean %>%
+  mutate(Ratio_15 = round(Value/msa_med_value_15, 2))
+```
+
+
+```{r}
+colnames(med_value_15_clean) <- c("Id", "GEOID", "Tract", "County", "Value_15", "MOE_15", "Ratio_15")
+colnames(med_value_10_clean) <- c("Id", "GEOID", "Tract", "County", "Value_10", "MOE_10", "Value_10_real", "Ratio_10_real")
+
+cville_hsg_market <- med_value_10_clean %>%
+  inner_join(med_value_15_clean, by = c("Id", "GEOID", "Tract", "County")) %>%
+  mutate(pct_change_ratio = round(((Ratio_15 - Ratio_10_real)/Ratio_10_real) * 100, 2),
+         pct_change_value = round(((Value_15 - Value_10_real)/Value_10_real) * 100, 2)) 
+```
+
+```{r message=FALSE, warning=FALSE}
+cville_tracts <- tracts(state = "VA", county = c("Albemarle", "Fluvanna", "Greene", "Nelson", "Charlottesville city", "Buckingham"))
+
+sector_tracts <- c("302", "102.01", "103", "102.02", "108", "106.01", "107", "8", "7", "2.01", "2.02", "6", "5.01")
+
+cville_hsg_sector <- cville_hsg_market %>%
+  filter(Tract %in% sector_tracts)
+
+cville_hsg_sector$Tract <- factor(cville_hsg_sector$Tract, levels = c("5.01", "6", "2.02", "2.01", "7", "8", "107", "106.01", "108", "102.02", "103", "102.01", "302"))
+
+cville_hsg_market <- cville_hsg_market %>%
+  mutate(in_sector = Tract %in% sector_tracts) %>%
+  mutate(in_sector = factor(in_sector, levels = c("TRUE", "FALSE")))
+
+cville_sector_geo <- geo_join(cville_tracts, cville_hsg_sector, by_sp = "GEOID", by_df = "GEOID", how = "inner")
+
+cville_hsg_geo <- geo_join(cville_tracts, cville_hsg_market, by_sp = "GEOID", by_df = "GEOID", how = "inner")
+```
+
+```{r}
+labels <- sprintf(
+  "<strong>Census Tract %s </strong><br/> Median value (2015 dollars): %g <br/> Ratio: %g",
+  cville_hsg_geo$Tract, cville_hsg_geo$Value_10_real, cville_hsg_geo$Ratio_10_real
+) %>% lapply(htmltools::HTML)
+
+bins <- c(0, 0.4, 0.8, 1.2, 1.6, Inf)
+pal <- colorBin("Spectral", cville_hsg_geo$Ratio_10_real, bins=bins)
+
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$CartoDB) %>%
+  addPolygons(
+    fillColor = ~pal(Ratio_10_real),
+    fillOpacity = 0.4,
+    color = "Black",
+    weight = 0.7,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~Ratio_10_real,
+    title = "Ratio, 2010"
+  ) %>%
+  addMiniMap(
+    tiles = providers$CartoDB.Positron,
+    position="topright",
+    toggleDisplay = TRUE
+  )
+  
+```
+
+```{r}
+labels <- sprintf(
+  "<strong>Census Tract %s </strong><br/> Median value (2015 dollars): %g",
+  cville_hsg_geo$Tract, cville_hsg_geo$Value_15
+) %>% lapply(htmltools::HTML)
+
+bins <- c(0, 0.4, 0.8, 1.2, 1.6, Inf)
+pal <- colorBin("Spectral", cville_hsg_geo$Ratio_15, bins=bins)
+
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    fillColor = ~pal(Ratio_15),
+    fillOpacity = 0.4,
+    color = "Black",
+    weight = 0.7,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~Ratio_15,
+    title = "Ratio, 2015"
+  ) %>%
+  addMiniMap(
+    tiles = providers$CartoDB.Positron,
+    position="topright",
+    toggleDisplay = TRUE
+  )
+```
+
+```{r}
+labels <- sprintf(
+  "<strong>Census Tract %s </strong><br/> Percent change in housing value ratio: %g",
+  cville_hsg_geo$Tract, cville_hsg_geo$pct_change_ratio
+) %>% lapply(htmltools::HTML)
+
+pal <- colorBin("BuPu", cville_hsg_geo$pct_change_ratio, 4)
+
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    fillColor = ~pal(pct_change_ratio),
+    fillOpacity = 0.4,
+    color = "Black",
+    weight = 0.7,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~pct_change_ratio,
+    title = "Percent change in housing value ratio (2010-2015)"
+  ) %>%
+  addMiniMap(
+    tiles = providers$CartoDB.Positron,
+    position="topright",
+    toggleDisplay = TRUE
+  )
+```
+
+```{r}
+labels <- sprintf(
+  "<strong>Census Tract %s </strong><br/> Percent change in housing values: %g",
+  cville_hsg_geo$Tract, cville_hsg_geo$pct_change_value
+) %>% lapply(htmltools::HTML)
+
+pal <- colorBin("BuPu", cville_hsg_geo$pct_change_value, 4)
+
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    fillColor = ~pal(pct_change_value),
+    fillOpacity = 0.4,
+    color = "Black",
+    weight = 0.7,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~pct_change_value,
+    title = "Percent change in housing values (2010-2015)"
+  ) %>%
+  addMiniMap(
+    tiles = providers$CartoDB.Positron,
+    position="topright",
+    toggleDisplay = TRUE
+  )
+```
+
+I want to choose Route 29 to be my housing sector. I'll start at the southern end of the sector in downtown Charlottesville and move north up 29 to tract 301.01.
+
+## Creating my sector
+
+
+```{r}
+labels <- sprintf(
+  "<strong>Census Tract %s </strong><br/> Real median value 2010: $%g <br/> Median value 2015: $%g <br/> Percent change 2010-2015: %g%%",
+  cville_sector_geo$Tract, cville_sector_geo$Value_10_real, cville_sector_geo$Value_15, cville_sector_geo$pct_change_value
+) %>% lapply(htmltools::HTML)
+
+pal <- colorFactor(
+  palette = c("#defc3c", "#778cb7"),
+  domain = cville_hsg_geo$in_sector
+)
+
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$OpenStreetMap.BlackAndWhite) %>%
+  addPolygons(
+    fillColor = ~pal(cville_hsg_geo$in_sector),
+    fillOpacity = 0.4,
+    color = "black",
+    weight = 1,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto"))
+```
+
+```{r}
+median(cville_hsg_market$Value_10_real, na.rm = TRUE)
+
+ggplot(cville_hsg_sector) +
+  geom_point(aes(x = Tract, y = Value_10_real), color = "#545454") +
+  geom_smooth(aes(x = Tract, y = Value_10_real, group = 1), color = "#04367c") +
+  geom_hline(yintercept = 286966.5, linetype = "dashed") + 
+  annotate("text", x = 1.5, y = 320000, label = "MSA") +
+  labs(title = "2010 Median Home Values in Charlottesville",
+       subtitle = "Following Route 29 from the CBD northbound",
+       y = "Median Value",
+       x = "Census Tracts",
+       caption = "2010 values are standardized to 2015 dollars for comparison") + 
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+```{r}
+median(cville_hsg_market$Value_15, na.rm = TRUE)
+ggplot(cville_hsg_sector) +
+  geom_point(aes(x = Tract, y = Value_15), color = "#545454") +
+  geom_smooth(aes(x = Tract, y = Value_15, group = 1), color = "#04367c") +
+  geom_hline(yintercept = 275800, linetype="dashed") + 
+  annotate("text", x = 1.5, y = 300000, label = "MSA") +
+  labs(title = "Northbound Route 29 Housing Market",
+       subtitle = "Following Route 29 from the CBD northbound",
+       y = "Median Value",
+       x = "Census Tract") +
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) +
+  scale_y_continuous(labels = scales::comma)
+ 
+```
+
+```{r}
+round(((275800 - 286966.5)/286966.5) *100, 2)
+
+ggplot(cville_hsg_sector) +
+  geom_point(aes(x = Tract, y = pct_change_value), color = "#545454") +
+  geom_smooth(aes(x = Tract, y = pct_change_value, group = 1), color = "#04367c") +
+  geom_hline(yintercept = -3.89, linetype = "dashed") +
+  annotate("text", x = 1.5, y = -1.5, label = "MSA") +
+  labs(title = "Percent Change in Median Values (2010-2015)",
+       subtitle = "Following Route 29 from the CBD northbound",
+       y = "% Change",
+       x = "Census Tract",
+       caption = "2010 values are standardized to 2015 dollars for comparison") + 
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+```{r}
+ggplot(cville_hsg_sector) +
+  geom_point(aes(x = Tract, y = Ratio_10_real), color = "#545454") +
+  geom_smooth(aes(x = Tract, y = Ratio_10_real, group = 1), color = "#04367c") +
+  geom_hline(yintercept = 1.0, linetype = "dashed") +
+  annotate("text", x = 1.5, y = 1.1, label = "MSA") +
+  labs(title = "Median house prices relative to MSA median, 2010",
+       subtitle = "Following Route 29 from the CBD northbound",
+       y = "Tract median value/MSA median value",
+       x = "Census Tract",
+       caption = "2010 values are standardized to 2015 dollars for comparison") + 
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) 
+```
+
+```{r}
+ggplot(cville_hsg_sector) +
+  geom_point(aes(x = Tract, y = Ratio_15), color = "#545454") +
+  geom_smooth(aes(x = Tract, y = Ratio_15, group = 1), color = "#04367c") +
+  geom_hline(yintercept = 1.0, linetype = "dashed") +
+  annotate("text", x = 1.5, y = 1.1, label = "MSA") +
+  labs(title = "Median house prices relative to MSA median, 2015",
+       subtitle = "Following Route 29 from the CBD northbound",
+       y = "Tract median value/MSA median value",
+       x = "Census Tract") + 
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) 
+```
+
+```{r}
+ggplot(cville_hsg_sector) +
+  geom_point(aes(x = Tract, y = pct_change_ratio), color = "#545454") +
+  geom_smooth(aes(x = Tract, y = pct_change_ratio, group = 1), color = "#04367c") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  annotate("text", x = 1.6, y = 3, label = "constant") +
+  labs(title = "Percent change in housing value ratios (2010-2015)",
+       subtitle = "Following Route 29 from the CBD northbound",
+       y = "%",
+       x = "Census Tract") + 
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) 
+```
+
+```{r}
+vineyard_names <- c("Afton Mountain Vineyards", "Barboursville Vineyards", "Blenheim Vineyards", "Brent Manor Vineyards", "Burnley Vineyards", "Cardinal Point Vineyard & Winery", "Chesnut Oak Vineyard", "DelFosse Vineyards & Winery", "Early Mountain Vineyards", "First Colony Winery", "Flying Fox Vineyard", "Gabriele Rausse Winery", "Glass House Winery", "Grace Estate Winery", "Horton Vineyards", "Jefferson Vineyards", "Keswick Vineyards", "Kilaurwen Winery", "King Family Vineyards", "Loving Cup Vineyard & Winery", "Lovingston Winery", "Michael Shaps Wineworks", "Moss Vineyards", "Pippin Hill Farm & Vineyards", "Pollak Vineyards", "Prince Michel Vineyards & Winery", "Reynard Florence Vineyard", "Stinson Vineyards", "Stone Mountain Vineyards", "Trump Winery", "Veritas Vineyard & Winery", "White Hall Vineyards", "Wisdon Oak Winery")
+
+vineyards_df <- data.frame(
+  name = vineyard_names)
+```
+
+```{r}
+library(RCurl)
+library(RJSONIO)
+library(plyr)
+ 
+url <- function(address, return.call = "json", sensor = "false") {
+ root <- "http://maps.google.com/maps/api/geocode/"
+ u <- paste(root, return.call, "?address=", address, "&sensor=", sensor, sep = "")
+ return(URLencode(u))
+}
+ 
+geoCode <- function(address,verbose=FALSE) {
+ if(verbose) cat(address,"\n")
+ u <- url(address)
+ doc <- getURL(u)
+ x <- fromJSON(doc,simplify = FALSE)
+ if(x$status=="OK") {
+ lat <- x$results[[1]]$geometry$location$lat
+ lng <- x$results[[1]]$geometry$location$lng
+ location_type <- x$results[[1]]$geometry$location_type
+ formatted_address <- x$results[[1]]$formatted_address
+ return(c(lat, lng, location_type, formatted_address))
+ } else {
+ return(c(NA,NA,NA, NA))
+ }
+}
+```
+
+```{r cache=TRUE}
+address <- vineyard_names
+locations  <- ldply(address, function(x) geoCode(x))
+```
+
+```{r}
+names(locations)  <- c("lat","lon","location_type", "formatted")
+locations$name <- vineyard_names
+locations$lat <- as.numeric(locations$lat)
+locations$lon <- as.numeric(locations$lon)
+head(locations)
+```
+
+```{r}
+icons <- awesomeIcons(
+  icon = 'ion-wineglass',
+  iconColor = 'black',
+  library = 'ion'
+)
+
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$OpenStreetMap.BlackAndWhite) %>%
+  addPolygons(
+    fillColor = "#778cb7",
+    fillOpacity = 0.4,
+    color = "black",
+    weight = 1,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto")) %>%
+  addAwesomeMarkers(data = locations, lng = ~lon, lat = ~lat, icon=icons, label=~name)
+```
+
+```{r}
+leaflet(cville_hsg_geo) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    fillColor = ~pal(Ratio_15),
+    fillOpacity = 0.4,
+    color = "Black",
+    weight = 0.7,
+    highlight = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~Ratio_15,
+    title = "Ratio, 2015"
+  ) %>%
+  addMiniMap(
+    tiles = providers$CartoDB.Positron,
+    position="topright",
+    toggleDisplay = TRUE
+  ) %>%
+  addAwesomeMarkers(data = locations, lng = ~lon, lat = ~lat, icon=icons, label=~name)
+```
+
+```{r}
+ggplot(cville_hsg_market, aes(x = Ratio_15)) +
+  geom_density(fill = "#04367c") +
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text()) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Median home values in Charlottesville, VA",
+       subtitle = "The distribution of 2015 median values in 44 census tracts in the metro area",
+       y = "Density",
+       x = "Tract Median Value")
+```
+
+```{r}
+ggplot() +
+  geom_boxplot(data = cville_hsg_market, aes(y = Ratio_15, x = 0), fill = "#778cb7") +
+  geom_boxplot(data = cville_hsg_sector, aes(y = Ratio_15, x = 1), fill = "#778cb7") +
+  theme_fivethirtyeight() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  annotate("label", x = 0, y = 2.4, label = "Charlottesville Metro Area") +
+  annotate("label", x = 1, y = 2.4, label = "Route 29 Northbound Submarket") +
+  theme(axis.title = element_text()) +
+  theme(axis.title.x = element_blank()) +
+  labs(title = "Distribution of median home values in 2015" ,
+       subtitle = "Comparing the Charlottesville market to the Route 29 Northbound Submarket",
+       y = "Proportion of MSA Median") +
+  ylim(0.5, 2.4)
+```
+
